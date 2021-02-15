@@ -21,7 +21,7 @@ library(ggplot2) #plots
 #library(afex) #CIs
 library(lubridate) #date
 #library(lsmeans) #least squares
-#library(nlme) #lme model
+library(nlme) #lme model
 library(psych) #describe
 library(ggsci) #plot colors (scale_color_npg())
 library(extrafont)
@@ -59,14 +59,16 @@ dat.calves <-
 
 
 dat <- 
-  merge(dat, dat.calves, by = "ID") 
+  merge(dat, dat.calves, by = "ID") %>%
+  mutate(Weight_kg = Weight*0.453592)
 
 #make after trt data
 dat.post <-
   dat %>%
   group_by(ID) %>%
   mutate(Baseline = PGE2[Time == "0"]) %>%
-  filter(Time != "0")
+  filter(Time != "0") %>%
+  ungroup()
 
 #make pre trt data
 dat.baseline <-   
@@ -78,6 +80,125 @@ dat.baseline <-
 
 # Explore data
 ```{r}
+#histogram of PGE2
+ggplot(data = dat.post, aes(x = PGE2)) + 
+  geom_histogram()
 
+#histogram of log(PGE2)
+ggplot(data = dat.post, aes(x = log(PGE2))) + 
+  geom_histogram()
+
+#baseline vs PGE2
+ggplot(data = dat.post, aes(x = log(Baseline), y = log(PGE2))) + 
+  geom_point() 
+
+
+
+#weight vs PGE2
+ggplot(data = dat.post, aes(x = Weight_kg, y = log(PGE2))) + 
+  geom_point() 
+
+
+#order vs PGE2
+ggplot(data = dat.post, aes(x = Order, y = log(PGE2))) + 
+  geom_point() 
+
+#bolus number vs PGE2
+ggplot(data = dat.post, aes(x = BolusNumber, y = log(PGE2))) + 
+  geom_point() 
+```
+
+# Analysis
+```{r}
+#model 
+model <- 
+    lme(
+      log(PGE2) ~ log(Baseline) + Order + Weight_kg + Time*Trt, 
+      random = ~1|ID, 
+      correlation = corAR1(),
+      #weights = varIdent(form = ~ 1 | Time),
+      method = "REML",
+      #control = lmeControl(maxIter = 1e8, msMaxIter = 1e8),
+      data = dat.post
+    )
+
+plot(model)
+
+anova.lme(model)
+
+multcomp::cld(emmeans(model, ~ Trt, type = "response"), alpha = .05)
+multcomp::cld(emmeans(model, ~ Time, type = "response"), alpha = .05)
+
+#baseline model
+model.baseline <- 
+    lm(
+      log(PGE2) ~ Order + Weight_kg + Trt, 
+      #method = "REML",
+      #control = lmeControl(maxIter = 1e8, msMaxIter = 1e8),
+      data = dat.baseline
+    )
+
+
+anova(model.baseline)
+
+#predict Y
+predict.post <- 
+  emmip(
+    model, 
+    Trt ~ Time,
+    CIs = TRUE, 
+    plotit = FALSE, 
+    type = "response",
+    level = .95
+  )
+
+predict.baseline <- 
+  emmip(
+    model.baseline, 
+    ~ Trt,
+    CIs = TRUE, 
+    plotit = FALSE, 
+    type = "response",
+    level = .95
+  ) %>%
+  mutate(Time = "0")
+
+#merge post and baseline
+predict.PGE2 <- rbind(predict.post, predict.baseline)
+predict.PGE2$Time <- as.numeric(levels(predict.PGE2$Time))[predict.PGE2$Time]
+
+#make plot
+{
+ggplot(data = predict.PGE2, 
+       aes(x = Time, y = yvar, color = Trt, linetype = Trt)) + 
+  
+  scale_color_jama() +
+  
+  scale_fill_jama() +
+  
+  geom_line(size = 1) + 
+    
+  geom_point() +
+  
+  #geom_errorbar(aes(ymin = LCL, ymax = UCL), alpha = .5, linetype = "solid") +
+  
+  labs(x = "Time after treatment, h", 
+       y = "Serum PGE2 concentration, pg mL\u207B\u00B9") +
+  
+  #scale_y_continuous(breaks = seq(0, 40, 10), minor_breaks = seq(0, 40, 5), limits = c(0, NA), expand = c(0, 0.1)) +
+  
+  #scale_x_continuous(breaks = c(-10, 1, 10, 30, 90, 210, 450), minor_breaks = NULL, expand = c(0,0)) +
+  
+  #geom_text(label = "a", x = 13, y = 25.2, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) + 
+  #geom_text(label = "ab", x = 13, y = 21.3, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) +
+  #geom_text(label = "b", x = 13, y = 17.2, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) +
+  
+  theme(
+    legend.position = c(.8, .8),
+    legend.background = element_rect(NA)
+  ) 
+  
+  #ggsave("figure_PGE2.png", width = 9.5, height = 5)
+}
 ```
 
