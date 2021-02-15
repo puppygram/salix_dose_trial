@@ -1,0 +1,83 @@
+---
+title: "Analysis of salix dose trial"
+author: "Hannah Phillips"
+date: "2/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(plyr)
+library(tidyverse)
+#library(lme4) #lmer
+#library(lmerTest) # KR ddf
+#library(MuMIn) #r.squaredGLMM
+library(ggplot2) #plots
+#library(merTools)
+#library(afex) #CIs
+library(lubridate) #date
+#library(lsmeans) #least squares
+#library(nlme) #lme model
+library(psych) #describe
+library(ggsci) #plot colors (scale_color_npg())
+library(extrafont)
+library(glmmTMB)
+library(DHARMa) #plot residuals for glmmTMB
+library(emmeans)
+
+theme_set(
+  theme_bw() +
+    theme(
+      text = element_text(family = "Palatino Linotype"),
+      legend.key.width = unit(1.5, "cm"),
+      axis.text = element_text(size = 9, color = "black"),
+      axis.title = element_text(size = 10),
+      legend.text = element_text(size = 9),
+      legend.title = element_text(size = 10),
+      
+    )
+)
+```
+
+# Input data
+```{r}
+dat <- 
+  read_excel("C:/Users/Hannah/Desktop/Salix project/data_PGE2.xlsx") %>%
+  mutate(Day = "1") %>%
+  mutate_at(vars(ID, Time, Trt, Day), as.factor) %>%
+  filter(!is.na(Trt))
+
+dat.calves <- 
+  read_excel("C:/Users/Hannah/Desktop/Salix project/data_study_design.xlsx", sheet = "Monday Dec 21 220") %>%
+  dplyr::select(c(Order, ID, Weight, BolusNumber)) %>%
+  mutate(BolusNumber = ceiling(BolusNumber)) %>%
+  mutate(BolusNumber = ifelse(is.na(BolusNumber), 0, BolusNumber))
+
+
+dat <- 
+  merge(dat, dat.calves, by = "ID") 
+
+#make after trt data
+dat.post <-
+  dat %>%
+  group_by(ID) %>%
+  mutate(Baseline = PGE2[Time == "0"]) %>%
+  filter(Time != "0")
+
+#make pre trt data
+dat.baseline <-   
+  dat %>%
+  filter(Time == "0") %>%
+  dplyr::select(-Time)
+
+```
+
+# Explore data
+```{r}
+
+```
+
