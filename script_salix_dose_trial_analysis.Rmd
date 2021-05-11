@@ -28,45 +28,70 @@ library(extrafont)
 library(glmmTMB)
 library(DHARMa) #plot residuals for glmmTMB
 library(emmeans)
+library(lme4)
+library(lmerTest) #lmer & KR ddf
 
 theme_set(
   theme_bw() +
     theme(
-      text = element_text(family = "Palatino Linotype"),
+      text = element_text(family = "Arial"),
       legend.key.width = unit(1.5, "cm"),
-      axis.text = element_text(size = 9, color = "black"),
-      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 10, color = "black"),
+      axis.title = element_text(size = 12),
       legend.text = element_text(size = 9),
-      legend.title = element_text(size = 10),
+      legend.title = element_text(size = 12),
       
     )
 )
+
+# 8 to 12 point font
 ```
 
 # Input data
 ```{r}
+#PGE2 and SA data
 dat <- 
-  read_excel("C:/Users/Hannah/Desktop/Salix project/data_PGE2.xlsx") %>%
-  mutate(Day = "1") %>%
-  mutate_at(vars(ID, Time, Trt, Day), as.factor) %>%
-  filter(!is.na(Trt))
+  read_excel("C:/Users/Hannah/Desktop/Salix project/data_PGE2_SA.xlsx", sheet = "Results") %>%
+  mutate(Time.num = Time) %>%
+  mutate_at(vars(ID, Time, Treatment, Period, Breed), as.factor) %>%
+  mutate(SA = ifelse(SA == "<20", 20, SA)) %>%
+  mutate(SA = as.numeric(SA))
 
-dat.calves <- 
+#add order of treatment data
+dat.calves.d1 <- 
   read_excel("C:/Users/Hannah/Desktop/Salix project/data_study_design.xlsx", sheet = "Monday Dec 21 220") %>%
   dplyr::select(c(Order, ID, Weight, BolusNumber)) %>%
   mutate(BolusNumber = ceiling(BolusNumber)) %>%
-  mutate(BolusNumber = ifelse(is.na(BolusNumber), 0, BolusNumber))
+  mutate(BolusNumber = ifelse(is.na(BolusNumber), 0, BolusNumber)) %>%
+  dplyr::select(-Weight) %>%
+  mutate(Period = "1")
 
+dat.calves.d2 <- 
+  read_excel("C:/Users/Hannah/Desktop/Salix project/data_study_design.xlsx", sheet = "Monday December 28 2020") %>%
+  dplyr::select(c(Order, ID, Weight, BolusNumber)) %>%
+  mutate(BolusNumber = ceiling(BolusNumber)) %>%
+  mutate(BolusNumber = ifelse(is.na(BolusNumber), 0, BolusNumber)) %>%
+  dplyr::select(-Weight) %>%
+  mutate(Period = "2")
 
+dat.calves <- rbind(dat.calves.d1, dat.calves.d2)
+
+#merge data
 dat <- 
-  merge(dat, dat.calves, by = "ID") %>%
-  mutate(Weight_kg = Weight*0.453592)
+  merge(dat, dat.calves, by = c("ID", "Period")) %>%
+  mutate(BWKG = BodyWeight*0.453592) %>%
+  group_by(ID) %>%
+  #mutate(FirstTreatment = Treatment[Period == "1" & Time == "0"]) %>%
+  #mutate(SecondTreatment = Treatment[Period == "2" & Time == "0"]) %>%
+  ungroup()
 
 #make after trt data
 dat.post <-
   dat %>%
-  group_by(ID) %>%
-  mutate(Baseline = PGE2[Time == "0"]) %>%
+  group_by(ID, Period) %>%
+  mutate(Baseline.PGE2 = PGE2[Time == "0"]) %>%
+  mutate(Change.PGE2 = PGE2 - Baseline.PGE2) %>%
+  mutate(Perc.change.PGE2 = Change.PGE2/Baseline.PGE2*100) %>%
   filter(Time != "0") %>%
   ungroup()
 
@@ -76,12 +101,44 @@ dat.baseline <-
   filter(Time == "0") %>%
   dplyr::select(-Time)
 
+#make max SA data
+dat.max.SA <-
+  dat.post %>%
+  group_by(ID, Period) %>%
+  filter(SA == max(SA)) %>%
+  rename(max.SA = SA) %>%
+  slice_head() %>%
+  ungroup()
+```
+
+# Age
+```{r}
+describe(subset(dat.baseline, Period == "1")$AgeDays)
+describe(subset(dat.baseline, Period == "1")$BWKG)
 ```
 
 # Explore data
 ```{r}
-#histogram of PGE2
+#test normality of PGE2
 ggplot(data = dat.post, aes(x = PGE2)) + 
+  geom_histogram()
+
+shapiro.test(dat.post$PGE2) # PGE2 is not normal
+
+#test normality of sqrt(PGE2)
+ggplot(data = dat.post, aes(x = sqrt(PGE2))) + 
+  geom_histogram()
+
+shapiro.test(sqrt(dat.post$PGE2)) # sqrt(PGE2) is better but still not normal
+
+
+#look for outliers in percent change in PGE2
+ggplot(data = dat.post, aes(x = Perc.change.PGE2)) + 
+  geom_histogram() # there are 2 potential outliers but we will keep them for now since we are not analyzing % change in PGE2
+
+
+#histogram of max SA
+ggplot(data = dat.max.SA, aes(x = max.SA)) + 
   geom_histogram()
 
 #histogram of log(PGE2)
@@ -89,76 +146,120 @@ ggplot(data = dat.post, aes(x = log(PGE2))) +
   geom_histogram()
 
 #baseline vs PGE2
-ggplot(data = dat.post, aes(x = log(Baseline), y = log(PGE2))) + 
-  geom_point() 
-
-
+ggplot(data = dat.post, aes(x = sqrt(Baseline.PGE2), y = sqrt(PGE2))) + 
+  geom_point() +
+  geom_smooth(method = "lm")
 
 #weight vs PGE2
-ggplot(data = dat.post, aes(x = Weight_kg, y = log(PGE2))) + 
-  geom_point() 
-
+ggplot(data = dat.post, aes(x = BWKG, y = sqrt(PGE2))) + 
+  geom_point() +
+  geom_smooth(method = "lm")
 
 #order vs PGE2
-ggplot(data = dat.post, aes(x = Order, y = log(PGE2))) + 
-  geom_point() 
+ggplot(data = dat.post, aes(x = Order, y = sqrt(PGE2))) + 
+  geom_point() +
+  geom_smooth(method = "lm")
 
-#bolus number vs PGE2
-ggplot(data = dat.post, aes(x = BolusNumber, y = log(PGE2))) + 
-  geom_point() 
+#age vs PGE2
+ggplot(data = dat.post, aes(x = AgeDays, y = sqrt(PGE2))) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+#age vs BW
+ggplot(data = dat.post, aes(x = AgeDays, y = BWKG)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+#breed vs PGE2
+ggplot(data = dat.post, aes(x = Breed, y = sqrt(PGE2))) + 
+  geom_boxplot()
+
+table(dat.post$Breed, dat.post$Treatment)
 ```
 
-# Analysis
+# Analysis - PGE2
 ```{r}
-#model 
-model <- 
-    lme(
-      log(PGE2) ~ log(Baseline) + Order + Weight_kg + Time*Trt, 
-      random = ~1|ID, 
-      correlation = corAR1(),
-      #weights = varIdent(form = ~ 1 | Time),
-      method = "REML",
-      #control = lmeControl(maxIter = 1e8, msMaxIter = 1e8),
+# test if there are carryover effects by testing Period*Treatment interaction (https://www.lexjansen.com/pharmasug/2006/Posters/PO16.pdf)
+
+# model
+model.PGE2 <- 
+    lmer(
+      PGE2 ~ scale(Baseline.PGE2) + Period + Time*Treatment + scale(BWKG) + (1|Period:ID) + (1|ID), 
+      REML = T,
       data = dat.post
     )
 
-plot(model)
+#pearson residuals
+plot(model.PGE2)
 
-anova.lme(model)
+#check normality - Q-Q plot
+qqnorm(residuals(model.PGE2))
+qqline(resid(model.PGE2))
 
-multcomp::cld(emmeans(model, ~ Trt, type = "response"), alpha = .05)
-multcomp::cld(emmeans(model, ~ Time, type = "response"), alpha = .05)
+#leverage plot
+ggplot(data.frame(lev = hatvalues(model.PGE2), pearson = residuals(model.PGE2, type = "pearson")),
+      aes(x = lev, y = pearson)) +
+    geom_point() +
+    theme_bw()
 
-#baseline model
-model.baseline <- 
-    lm(
-      log(PGE2) ~ Order + Weight_kg + Trt, 
-      #method = "REML",
-      #control = lmeControl(maxIter = 1e8, msMaxIter = 1e8),
+#Bonferroni test for outliers
+car::outlierTest(model.PGE2) 
+dat.post[64,] 
+
+#output
+summary(model.PGE2)
+
+#ANOVA table
+anova(model.PGE2, ddf = "Kenward-Roger")
+
+multcomp::cld(emmeans(model.PGE2, ~ Treatment), alpha = .05)
+multcomp::cld(emmeans(model.PGE2, ~ Treatment, by = "Time"), alpha = .05)
+multcomp::cld(emmeans(model.PGE2, ~ Time), alpha = .05)
+
+#LSMs
+emmeans(model.PGE2, "Treatment", lmer.df = "Kenward-Roger", type = "response")
+emmeans(model.PGE2, "Time", lmer.df = "Kenward-Roger", type = "response")
+
+#pairwise comparison
+pairs(emmeans(model.PGE2, "Treatment", lmer.df = "Kenward-Roger", type = "response"))
+pairs(emmeans(model.PGE2, "Time", lmer.df = "Kenward-Roger", type = "response"))
+
+# baseline model
+model.baseline.PGE2 <- 
+    lmer(
+      PGE2 ~ Period + Treatment + scale(BWKG) + (1|ID), 
+      REML = T,
       data = dat.baseline
     )
 
+anova(model.baseline.PGE2, ddf = "Kenward-Roger")
 
-anova(model.baseline)
+#LSMs
+emmeans(model.baseline.PGE2, "Treatment", lmer.df = "Kenward-Roger", type = "response")
+```
 
+## Plot - PGE2
+```{r}
 #predict Y
 predict.post <- 
   emmip(
-    model, 
-    Trt ~ Time,
-    CIs = TRUE, 
-    plotit = FALSE, 
-    type = "response",
+    model.PGE2, 
+    Treatment ~ Time,
+    SE = T,
+    CIs = F, 
+    plotit = F, 
+    #type = "response",
     level = .95
   )
 
 predict.baseline <- 
   emmip(
-    model.baseline, 
-    ~ Trt,
-    CIs = TRUE, 
-    plotit = FALSE, 
-    type = "response",
+    model.baseline.PGE2, 
+    ~ Treatment,
+    SE = T,
+    CIs = F, 
+    plotit = F, 
+    #type = "response",
     level = .95
   ) %>%
   mutate(Time = "0")
@@ -170,7 +271,7 @@ predict.PGE2$Time <- as.numeric(levels(predict.PGE2$Time))[predict.PGE2$Time]
 #make plot
 {
 ggplot(data = predict.PGE2, 
-       aes(x = Time, y = yvar, color = Trt, linetype = Trt)) + 
+       aes(x = Time, y = yvar, color = Treatment, linetype = Treatment, shape = Treatment)) + 
   
   scale_color_jama() +
   
@@ -180,25 +281,45 @@ ggplot(data = predict.PGE2,
     
   geom_point() +
   
-  #geom_errorbar(aes(ymin = LCL, ymax = UCL), alpha = .5, linetype = "solid") +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), alpha = 1, linetype = "solid", width = 0.2) +
   
   labs(x = "Time after treatment, h", 
-       y = "Serum PGE2 concentration, pg mL\u207B\u00B9") +
+       y = "Plasma PGE2 concentration, pg mL\u207B\u00B9") +
   
-  #scale_y_continuous(breaks = seq(0, 40, 10), minor_breaks = seq(0, 40, 5), limits = c(0, NA), expand = c(0, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 5000, 1000), minor_breaks = seq(0, 5000, 500), limits = c(0, 4500), expand = c(0, NA)) +
   
-  #scale_x_continuous(breaks = c(-10, 1, 10, 30, 90, 210, 450), minor_breaks = NULL, expand = c(0,0)) +
+  scale_x_continuous(breaks = c(0, 1, 2, 3, 4), minor_breaks = NULL) +
   
   #geom_text(label = "a", x = 13, y = 25.2, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) + 
   #geom_text(label = "ab", x = 13, y = 21.3, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) +
   #geom_text(label = "b", x = 13, y = 17.2, color = "gray40", family = "Times New Roman", size = 5, hjust = 0) +
   
   theme(
-    legend.position = c(.8, .8),
-    legend.background = element_rect(NA)
-  ) 
+    legend.position = c(.85, .85),
+    legend.background = element_rect(NA) 
+  ) +
   
-  #ggsave("figure_PGE2.png", width = 9.5, height = 5)
+  ggsave("figure_PGE2.tiff", width = 8.9, height = 5.5, units = "cm") # either 8.9 or 14 cm wide
 }
 ```
 
+
+# Analysis - SA
+```{r}
+#model
+model.SA <- 
+    lmer(
+      max.SA ~ Period + Treatment + scale(BWKG) + (1|ID), 
+      REML = T,
+      data = subset(dat.max.SA, Treatment != "Banamine" & Treatment != "Control")
+    )
+
+#output
+summary(model.SA)
+
+#ANOVA table
+anova(model.SA, ddf = "Kenward-Roger")
+
+#LSMs
+emmeans(model.SA, "Treatment", lmer.df = "Kenward-Roger")
+```
